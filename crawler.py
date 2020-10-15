@@ -112,7 +112,7 @@ def pipeline(response, spider) :
     keywords = " ".join(["%s "%(kw)*score for kw, score in keywords.most_common(100)])"""
 
     # index url and data
-    res = spider.es_client.index(index="web-%s"%lang, doc_type='page', id=response.url, body={
+    res = spider.es_client.index(index="web-%s"%lang, id=response.url, body={
         "url":response.url,
         "domain":domain,
         "title":title,
@@ -168,9 +168,9 @@ def create_thumbnail(url_id, lang, link) :
         img_str = img_str.decode("utf8")
 
         # finally, save into elasticsearch
-        url = client.get(index="web-%s"%lang, doc_type='page', id=url_id)
+        url = client.get(index="web-%s"%lang, id=url_id)
         url["_source"]["thumbnail"] = img_str
-        res = client.index(index="web-%s"%lang, doc_type='page', id=url_id, body=url["_source"])
+        res = client.index(index="web-%s"%lang,id=url_id, body=url["_source"])
         return 1
 
     return 0

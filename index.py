@@ -30,62 +30,127 @@ import requests
 import json
 import query
 from flask import Flask, request, jsonify
-from elasticsearch_dsl.connections import connections
-from elasticsearch_dsl import Index, Search, Mapping
+#from elasticsearch_dsl.connections import connections
+#from elasticsearch_dsl import Index, Mapping
 from language import languages
 from redis import Redis
 from rq import Queue
 from rq.decorators import job
 from scrapy.crawler import CrawlerProcess
+from scrapy.crawler import CrawlerRunner
 from urllib.parse import urlparse
 from datetime import datetime
+from elasticsearch import Elasticsearch
+from flask_rq2 import RQ
+import logging
+from twisted.internet import reactor
 
 # init flask app and import helper
 app = Flask(__name__)
 with app.app_context():
     from helper import *
-
+app.config['RQ_REDIS_URL']='redis://localhost:6379/0'
 # initiate the elasticsearch connection
 hosts = [os.getenv("HOST")]
 http_auth = (os.getenv("USERNAME"), os.getenv("PASSWORD"))
 port = os.getenv("PORT")
-client = connections.create_connection(hosts=hosts, http_auth=http_auth, port=port)
+#client = connections.create_connection(hosts=hosts, http_auth=http_auth, port=port)
+logging.basicConfig(filename=datetime.now().strftime('server_%d_%m_%Y.log'),level=logging.INFO,format='%(asctime)s %(levelname)-8s %(message)s')
 
 # initiate Redis connection
-redis_conn = Redis(os.getenv("REDIS_HOST", "redis"), os.getenv("REDIS_PORT", 6379))
+#redis_conn = RQ(os.getenv("REDIS_HOST", "redis"), os.getenv("REDIS_PORT", 6379))
+redis_conn = RQ(app)
 
 # create indices and mappings
-for lang in ["fr"] : #languages :
-    # index named "web-<language code>"
-    index = Index('web-%s'%lang)
-    if not index.exists() :
-        index.create()
 
+es = Elasticsearch(hosts="http://bijin:Samsung1!@localhost:9200/")
+logging.info(es.info())
+#for lang in ["en"] : #languages :
+    # index named "web-<language code>"
+#    index = Index('web-%s'%lang)
+ #   if not index.exists() :
+  #      index.create()
+settings = {
+    "settings": {
+        "number_of_shards": 1,
+        "number_of_replicas": 0
+    },
+    "mappings": {
+          "properties": {
+                "url": {
+                    "type": "keyword"
+                },
+                "domain":{
+                    "type": "keyword"
+                },
+                "title":{
+                    "type": "text",
+                    "analyzer": "english"
+                },
+                "description":{
+                    "type": "text",
+                    "analyzer": "english"
+                },
+                "body":{
+                    "type": "text",
+                    "analyzer": "english"
+                },
+                "weight":{
+                    "type": "long"
+                }
+            }
+        }
+    
+}
+es.indices.create(index='web-en',ignore=400,body=settings)
     # mapping of page
-    m = Mapping('page')
-    m.field('url', 'keyword')
-    m.field('domain', 'keyword')
-    m.field('title', 'text', analyzer=languages[lang])
-    m.field('description', 'text', analyzer=languages[lang])
-    m.field('body', 'text', analyzer=languages[lang])
-    m.field('weight', 'long')
+   # m = Mapping('page')
+   # m.field('url', 'keyword')
+   # m.field('domain', 'keyword')
+   # m.field('title', 'text', analyzer=languages[lang])
+   # m.field('description', 'text', analyzer=languages[lang])
+   # m.field('body', 'text', analyzer=languages[lang])
+   # m.field('weight', 'long')
     #m.field('thumbnail', 'binary')
     #m.field('keywords', 'completion') # -- TEST -- #
-    m.save('web-%s'%lang)
+    #m.save('web-%s'%lang)
 
 # index for misc mappings
-index = Index('web')
-if not index.exists() :
-    index.create()
-
+#index = Index('web')
+#if not index.exists() :
+#    index.create()
+settings = {
+    "settings": {
+        "number_of_shards": 1,
+        "number_of_replicas": 0
+    },
+    "mappings": {
+          "properties": {
+                "homepage": {
+                    "type": "keyword"
+                },
+                "domain": {
+                    "type": "keyword"
+                },
+                "email": {
+                    "type": "keyword"
+                },
+                "last_crawl": {
+                    "type": "date"
+                }
+          }      
+    }      
+    
+}
+es.indices.create(index='web',ignore=400,body=settings)
 # mapping of domain
-m = Mapping('domain')
-m.field('homepage', 'keyword')
-m.field('domain', 'keyword')
-m.field('email', 'keyword')
-m.field('last_crawl', 'date')
-#m.field('keywords', 'text', analyzer=languages[lang])
-m.save('web')
+# m = Mapping('domain')
+# m.field('homepage', 'keyword')
+# m.field('domain', 'keyword')
+# m.field('email', 'keyword')
+# m.field('last_crawl', 'date')
+# m.field('keywords', 'text', analyzer=languages[lang])
+# m.save('web')
 
 @app.route("/index", methods=['POST'])
 def index():
@@ -128,7 +193,7 @@ def index_job(link) :
             'scrapy.spidermiddlewares.httperror.HttpErrorMiddleware':True
         }
     })
-    process.crawl(crawler.SingleSpider, start_urls=[link,], es_client=client, redis_conn=redis_conn)
+    process.crawl(crawler.SingleSpider, start_urls=[link,], es_client=es, redis_conn=redis_conn)
     process.start() # block until finished
 
 @app.route("/explore", methods=['POST'])
@@ -146,17 +211,18 @@ def explore():
     if "url" not in data :
         raise InvalidUsage('No url specified in POST data')
 
-    # launch exploration job
-    explore_job.delay(data["url"])
+    logging.info("launch exploration job")
+    job = explore_job.queue(data["url"])
+    job.perform()
 
     return "Exploration started"
 
-@job('default', connection=redis_conn)
+@redis_conn.job('low')
 def explore_job(link) :
     """
     Explore a website and index all urls (redis-rq process).
     """
-    print("explore website at : %s"%link)
+    logging.info("explore website at : %s"%link)
 
     # get final url after possible redictions
     try :
@@ -166,14 +232,14 @@ def explore_job(link) :
 
     # create or update domain data
     domain = url.domain(link)
-    res = client.index(index="web", doc_type='domain', id=domain, body={
+    res = es.index(index="web",id=domain, body={
         "homepage":link,
         "domain":domain,
         "last_crawl":datetime.now()
     })
 
     # start crawler
-    process = CrawlerProcess({
+    runner = CrawlerRunner({
         'USER_AGENT': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/55.0.2883.75 Safari/537.36",
         'DOWNLOAD_TIMEOUT':100,
         'DOWNLOAD_DELAY':0.25,
@@ -188,9 +254,11 @@ def explore_job(link) :
         },
         'CLOSESPIDER_PAGECOUNT':500 #only for debug
     })
-    process.crawl(crawler.Crawler, allowed_domains=[urlparse(link).netloc], start_urls = [link,], es_client=client, redis_conn=redis_conn)
-    process.start()
+    runner.crawl(crawler.Crawler, allowed_domains=[urlparse(link).netloc], start_urls = [link,], es_client=es, redis_conn=redis_conn)
+    d = runner.join()
+    d.addBoth(lambda _: reactor.stop())
 
+    reactor.run()
     return 1
 
 @app.route("/reference", methods=['POST'])
@@ -229,7 +297,7 @@ def reference_job(link, email) :
 
     # create or update domain data
     domain = url.domain(link)
-    res = client.index(index="web", doc_type='domain', id=domain, body={
+    res = es.index(index="web",id=domain, body={
         "homepage":link,
         "domain":domain,
         "email":email
@@ -287,19 +355,19 @@ def search():
     groups = re.search("(site:(?P<domain>[^ ]+))?( ?(?P<query>.*))?",data["query"]).groupdict()
     if groups.get("query", False) and groups.get("domain", False) :
         # expression in domain query
-        response = client.search(index="web-*", doc_type="page", body=query.domain_expression_query(groups["domain"], groups["query"]), from_=start, size=hits)
+        response = es.search(index="web-*", body=query.domain_expression_query(groups["domain"], groups["query"]), from_=start, size=hits)
         results = [format_result(hit["_source"], hit.get("highlight", None)) for hit in response["hits"]["hits"]]
         total = response["hits"]["total"]
 
     elif groups.get("domain", False) :
         # domain query
-        response = client.search(index="web-*", doc_type="page", body=query.domain_query(groups["domain"]), from_=start, size=hits)
+        response = es.search(index="web-*",body=query.domain_query(groups["domain"]), from_=start, size=hits)
         results = [format_result(hit["_source"], None) for hit in response["hits"]["hits"]]
         total = response["hits"]["total"]
 
     elif groups.get("query", False) :
         # expression query
-        response = client.search(index="web-*", doc_type="page", body=query.expression_query(groups["query"]))
+        response = es.search(index="web-*",body=query.expression_query(groups["query"]))
         results = []
         for domain_bucket in response['aggregations']['per_domain']['buckets']:
             for hit in domain_bucket["top_results"]["hits"]["hits"] :
