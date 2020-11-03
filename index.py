@@ -35,6 +35,9 @@ from flask import Flask, request, jsonify
 from language import languages
 from redis import Redis
 from rq import Queue
+from multiprocessing import Process
+from multiprocessing import Queue as Q
+from twisted.internet import reactor
 from rq.decorators import job
 from scrapy.crawler import CrawlerProcess
 from scrapy.crawler import CrawlerRunner
@@ -237,28 +240,40 @@ def explore_job(link) :
         "domain":domain,
         "last_crawl":datetime.now()
     })
+    def f(q):
+        try:
+            # start crawler
+            runner = CrawlerRunner({
+                'USER_AGENT': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/55.0.2883.75 Safari/537.36",
+                'DOWNLOAD_TIMEOUT':100,
+                'DOWNLOAD_DELAY':0.25,
+                'ROBOTSTXT_OBEY':True,
+                'HTTPCACHE_ENABLED':False,
+                'REDIRECT_ENABLED':False,
+                'SPIDER_MIDDLEWARES' : {
+                    'scrapy.downloadermiddlewares.robotstxt.RobotsTxtMiddleware':True,
+                    'scrapy.spidermiddlewares.httperror.HttpErrorMiddleware':True,
+                    'scrapy.downloadermiddlewares.httpcache.HttpCacheMiddleware':True,
+                    'scrapy.extensions.closespider.CloseSpider':True
+                },
+                'CLOSESPIDER_PAGECOUNT':500 #only for debug
+            })
+            runner.crawl(crawler.Crawler, allowed_domains=[urlparse(link).netloc], start_urls = [link,], es_client=es, redis_conn=redis_conn)
+            d = runner.join()
+            d.addBoth(lambda _: reactor.stop())
 
-    # start crawler
-    runner = CrawlerRunner({
-        'USER_AGENT': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/55.0.2883.75 Safari/537.36",
-        'DOWNLOAD_TIMEOUT':100,
-        'DOWNLOAD_DELAY':0.25,
-        'ROBOTSTXT_OBEY':True,
-        'HTTPCACHE_ENABLED':False,
-        'REDIRECT_ENABLED':False,
-        'SPIDER_MIDDLEWARES' : {
-            'scrapy.downloadermiddlewares.robotstxt.RobotsTxtMiddleware':True,
-            'scrapy.spidermiddlewares.httperror.HttpErrorMiddleware':True,
-            'scrapy.downloadermiddlewares.httpcache.HttpCacheMiddleware':True,
-            'scrapy.extensions.closespider.CloseSpider':True
-        },
-        'CLOSESPIDER_PAGECOUNT':500 #only for debug
-    })
-    runner.crawl(crawler.Crawler, allowed_domains=[urlparse(link).netloc], start_urls = [link,], es_client=es, redis_conn=redis_conn)
-    d = runner.join()
-    d.addBoth(lambda _: reactor.stop())
+            reactor.run()
+            q.put(None)
+        except Exception as e:
+            q.put(e)
+    q = Q()
+    p = Process(target=f, args=(q,))
+    p.start()
+    result = q.get()
+    p.join()
 
-    reactor.run()
+    if result is not None:
+        raise result        
     return 1
 
 @app.route("/reference", methods=['POST'])
