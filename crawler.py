@@ -15,12 +15,12 @@ from collections import Counter
 from PIL import Image
 from rq.decorators import job
 from rq import Queue
-from elasticsearch_dsl.connections import connections
+from elasticsearch import Elasticsearch
 
 hosts = [os.getenv("HOST")]
 http_auth = (os.getenv("USERNAME"), os.getenv("PASSWORD"))
 port = os.getenv("PORT")
-client = connections.create_connection(hosts=hosts, http_auth=http_auth, port=port)
+client = Elasticsearch(hosts="http://bijin:Samsung1!@localhost:9200/")
 
 class SingleSpider(scrapy.spiders.CrawlSpider):
     """
@@ -44,9 +44,11 @@ class Crawler(scrapy.spiders.CrawlSpider):
         # Extract all inner domain links with state "follow"
         Rule(LinkExtractor(), callback='parse_items', follow=True, process_links='links_processor'),
     )
-    es_client=None  # elastic client
-    redis_conn=None # redis client
-
+    #es_client=None  # elastic client
+    #redis_conn=None # redis client
+    def parse(self):
+        pass
+    
     def links_processor(self,links):
         """
         A hook into the links processing from an existing page, done in order to not follow "nofollow" links
@@ -122,12 +124,12 @@ def pipeline(response, spider) :
     })
 
     # try to create thumbnail from page
-    img_link = response.css("meta[property='og:image']::attr(content)").extract_first()
-    if not img_link :
-        img_link = response.css("meta[name='twitter:image']::attr(content)").extract_first()
-    if img_link :
-        q = Queue(connection=spider.redis_conn)
-        q.enqueue(create_thumbnail, response.url, lang, img_link)
+    # img_link = response.css("meta[property='og:image']::attr(content)").extract_first()
+    # if not img_link :
+    #     img_link = response.css("meta[name='twitter:image']::attr(content)").extract_first()
+    # if img_link :
+    #     q = Queue(connection=spider.redis_conn)
+    #     q.enqueue(create_thumbnail, response.url, lang, img_link)
 
     # check for redirect url
     if response.status in spider.handle_httpstatus_list and 'Location' in response.headers:
