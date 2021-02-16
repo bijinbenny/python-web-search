@@ -2,9 +2,10 @@ Flask
 jusText==2.2.0
 requests
 elasticsearch-dsl>=5.0.0,<6.0.0
+elasticsearch>=7.0.0,<8.0.0
 html2text
 langdetect
-scrapy
+scrapy==2.3.0
 tldextract
 redis
 rq

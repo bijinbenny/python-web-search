@@ -12,10 +12,13 @@ from scrapy.linkextractors import LinkExtractor
 from scrapy.http import Request
 from language import languages
 from collections import Counter
-from PIL import Image
+#from PIL import Image
 from rq.decorators import job
 from rq import Queue
 from elasticsearch import Elasticsearch
+from bert_serving.client import BertClient
+
+#bc = BertClient(ip='localhost',output_fmt='list')
 
 hosts = [os.getenv("HOST")]
 http_auth = (os.getenv("USERNAME"), os.getenv("PASSWORD"))
@@ -38,6 +41,10 @@ class Crawler(scrapy.spiders.CrawlSpider):
     """
     Explore a website and index all urls.
     """
+    # def __init__(self, bert_client=None, *args, **kwargs):
+    #     super(Crawler, self).__init__(*args, **kwargs)
+    #     self.bert_client = bert_client
+
     name = 'crawler'
     handle_httpstatus_list = [301, 302, 303] # redirection allowed
     rules = (
@@ -102,16 +109,14 @@ def pipeline(response, spider) :
     if body.count(" ") < boilerplate.count(" ") or not url.create_description(body) :
         # probably bad content quality
         weight -= 1
-
-    # -- TEST -- #
-    """keywords = Counter()
-    text_for_keywords = "%s\n%s\n%s"%(title, description, bestbody)
-    r = requests.post('http://localhost:5001/keywords_from_text', data = {'text':text_for_keywords})
-    data = r.json()
-    #print(hit.url, data)
-    for k in data["keywords"] :
-        keywords[k] += 1
-    keywords = " ".join(["%s "%(kw)*score for kw, score in keywords.most_common(100)])"""
+    # input_list = []
+    # if(not body or body == ''):
+    #      body = 'NIL'
+    # input_list.append(body)          
+    # #print(str(body)) 
+    # print("Client : " + str(spider.bert_client))    
+    # emb =  spider.bert_client.encode(input_list)
+    # print(str(emb))
 
     # index url and data
     res = spider.es_client.index(index="web-%s"%lang, id=response.url, body={

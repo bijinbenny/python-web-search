@@ -48,6 +48,7 @@ from flask_rq2 import RQ
 import logging
 from twisted.internet import reactor
 
+
 # init flask app and import helper
 app = Flask(__name__)
 with app.app_context():
@@ -58,7 +59,7 @@ hosts = [os.getenv("HOST")]
 http_auth = (os.getenv("USERNAME"), os.getenv("PASSWORD"))
 port = os.getenv("PORT")
 #client = connections.create_connection(hosts=hosts, http_auth=http_auth, port=port)
-logging.basicConfig(filename=datetime.now().strftime('server_%d_%m_%Y.log'),level=logging.INFO,format='%(asctime)s %(levelname)-8s %(message)s')
+logging.basicConfig(filename=datetime.now().strftime('server_%d_%m_%Y.log'),level=logging.DEBUG,format='%(asctime)s %(levelname)-8s %(message)s')
 
 # initiate Redis connection
 #redis_conn = RQ(os.getenv("REDIS_HOST", "redis"), os.getenv("REDIS_PORT", 6379))
@@ -79,7 +80,7 @@ settings = {
         "number_of_replicas": 0
     },
     "mappings": {
-          "properties": {
+            "properties": {
                 "url": {
                     "type": "keyword"
                 },
@@ -100,12 +101,16 @@ settings = {
                 },
                 "weight":{
                     "type": "long"
+                },
+                "text_vector":{
+                    "type": "dense_vector",
+                    "dims": 768
                 }
             }
-        }
+    }
     
 }
-es.indices.create(index='web-en',ignore=400,body=settings)
+#es.indices.create(index='web-en',ignore=400,body=settings)
     # mapping of page
    # m = Mapping('page')
    # m.field('url', 'keyword')
@@ -359,6 +364,7 @@ def search():
 
     # get POST data
     data = dict((key, request.form.get(key)) for key in request.form.keys())
+    logging.info("[Tiger] search request data : "+ str(data))
     if "query" not in data :
         raise InvalidUsage('No query specified in POST data')
     start = int(data.get("start", "0"))
@@ -370,25 +376,31 @@ def search():
     groups = re.search("(site:(?P<domain>[^ ]+))?( ?(?P<query>.*))?",data["query"]).groupdict()
     if groups.get("query", False) and groups.get("domain", False) :
         # expression in domain query
+        logging.info("[Tiger] Domain expression query")
         response = es.search(index="web-*", body=query.domain_expression_query(groups["domain"], groups["query"]), from_=start, size=hits)
         results = [format_result(hit["_source"], hit.get("highlight", None)) for hit in response["hits"]["hits"]]
         total = response["hits"]["total"]
 
     elif groups.get("domain", False) :
         # domain query
+        logging.info("[Tiger] Domain query")
         response = es.search(index="web-*",body=query.domain_query(groups["domain"]), from_=start, size=hits)
         results = [format_result(hit["_source"], None) for hit in response["hits"]["hits"]]
         total = response["hits"]["total"]
 
     elif groups.get("query", False) :
         # expression query
-        response = es.search(index="web-*",body=query.expression_query(groups["query"]))
+        logging.info("[Tiger] Expression query : " + str(groups["query"]))
+        response = es.search(index="web-en",body=query.expression_query(groups["query"]))
+        logging.info("[Tiger] Raw response" + str(response))
         results = []
         for domain_bucket in response['aggregations']['per_domain']['buckets']:
             for hit in domain_bucket["top_results"]["hits"]["hits"] :
                 results.append((format_result(hit["_source"], hit.get("highlight", None)),hit["_score"]))
+        logging.info("[Tiger] Before Sort Results :" + str(results))        
         results = [result[0] for result in sorted(results, key=lambda result: result[1], reverse=True)]
+        logging.info("[Tiger] After Sort Results :" + str(results))
         total = len(results)
         results = results[start:start+hits]
-
+        logging.info("[Tiger] Total results : "+ str(total))
     return jsonify(total=total, results=results)
