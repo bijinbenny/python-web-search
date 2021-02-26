@@ -15,34 +15,18 @@ from collections import Counter
 from rq.decorators import job
 from rq import Queue
 from elasticsearch import Elasticsearch
-from bert_serving.client import BertClient
 
-#bc = BertClient(ip='localhost',output_fmt='list')
-
-hosts = [os.getenv("HOST")]
-http_auth = (os.getenv("USERNAME"), os.getenv("PASSWORD"))
+host = os.getenv("HOST")
+user = os.getenv("USERNAME")
+pwd  = os.getenv("PASSWORD")
 port = os.getenv("PORT")
-client = Elasticsearch(hosts="http://bijin:Samsung1!@localhost:9200/")
+client = Elasticsearch(hosts="http://"+user+":"+pwd+"@"+host+":"+port+"/")
 
-class SingleSpider(scrapy.spiders.CrawlSpider):
-    """
-    Single page spider.
-    """
-    name = "spider"
-    handle_httpstatus_list = [301, 302, 303] # redirection allowed
-    es_client=None # elastic client
-    redis_conn=None # redis client
-
-    def parse(self, response):
-        yield pipeline(response, self)
 
 class Crawler(scrapy.spiders.CrawlSpider):
     """
     Explore a website and index all urls.
     """
-    # def __init__(self, bert_client=None, *args, **kwargs):
-    #     super(Crawler, self).__init__(*args, **kwargs)
-    #     self.bert_client = bert_client
 
     name = 'crawler'
     handle_httpstatus_list = [301, 302, 303] # redirection allowed
@@ -50,8 +34,7 @@ class Crawler(scrapy.spiders.CrawlSpider):
         # Extract all inner domain links with state "follow"
         Rule(LinkExtractor(), callback='parse_items', follow=True, process_links='links_processor'),
     )
-    #es_client=None  # elastic client
-    #redis_conn=None # redis client
+
     def parse(self):
         pass
     
@@ -108,7 +91,7 @@ def pipeline(response, spider) :
     if body.count(" ") < boilerplate.count(" ") or not url.create_description(body) :
         # probably bad content quality
         weight -= 1
-        
+
     res = spider.es_client.index(index="web-%s"%lang, id=response.url, body={
         "url":response.url,
         "domain":domain,

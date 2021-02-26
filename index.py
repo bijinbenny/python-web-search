@@ -258,3 +258,4 @@ def search():
     logging.info("Total results : "+ str(total))
 
     return jsonify(total=total, results=results)
+
